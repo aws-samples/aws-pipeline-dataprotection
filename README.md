@@ -21,17 +21,17 @@ git clone https://github.com/aws-samples/aws-pipeline-dataprotection.git
 ```
 
 ## Step by Step Implementation Guide
-Run bash scripts
+# Run bash scripts
 * bash eks-cluster-setup.sh
 * bash eks-cluster-addons-setup.sh
 
-DNS domain name
+# DNS domain name
 *  create a new DNS domain name if not already exists
     * update this parameter 'DNSDomainName' in this file 'basic-infra-cft.yaml'
     * update this parameter 'AlternateDomainNames' in this file 'basic-infra-cf-cft.yaml'
     * update 'WP_HOME & WP_SITEURL' parameters in this file 'wp-config-docker.php'
 
-Run prerequisites cloudformation template
+# Run prerequisites cloudformation template
 * go to cloudformation console section after login to your account
 * cloudformation stack role 'CFTStackCreationRole' is created in the previous step, use it for new cloudformation stack creation with the below templates    
 * basic-infra-cft.yaml        
@@ -44,7 +44,7 @@ Run prerequisites cloudformation template
         * RepositoryName, BranchName, EksClusterName, EksClusterRegion, EKSServiceRole
     * create a application cicd pipeline stack using this template to create codepipeline with source, build and deploy stages
 
-Update rds secret and acm certificate arn
+# Update rds secret and acm certificate arn
 * update the ecr repository in the 'wordpress-deployment.yaml' containers section
 * update the rds db host in the 'wordpress-deployment.yaml' env section
 * update the rds mysql secret name in the 'wordpress-deployment-spc.yaml' spec section to pull the rds credentials from secretsmanager and set it in application pod
@@ -52,15 +52,15 @@ Update rds secret and acm certificate arn
 * update alb security groups in the 'wordpress-ingress.yaml' annotation section to configure alb appropriately
     * please fetch these security group names "alb_managed" & "alb_shared" and update it
 
-Deploy the wordpress application using cicd pipeline
+# Deploy the wordpress application using cicd pipeline
 
-Run cloudfront cloudformation template
+# Run cloudfront cloudformation template
 * basic-infra-cf-cft.yaml
     * update the below parameters in this template to configure origin appropriately
         * ALBDNSName, AlternateDomainNames, ACMCertificateIdentifier, TrustedIPAddresses
     * this template has to be run/update whenever alb url changes, so that cloudfront configuration will get updated accordingly
 
-Delete all the resources once the sample application exercise is done
+# Delete all the resources once the sample application exercise is done
 
 ## Security
 
