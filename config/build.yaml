@@ -1,0 +1,41 @@
+################################################################################
+#  Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#  SPDX-License-Identifier: MIT-0
+#  -----------------------------------------------------------------------------
+# This buildspec file is provided as an example. If left unchanged, it will
+# simply do nothing. An example of running a prod deploy to an EKS cluster is
+# provided in the comments below. Depending on your setup, you may have multiple
+# environments. In this case, we show just one staging environment. If you wish
+# to add additional environments, you will need to add the corresponding stages
+# and build projects to the Cloudformation template.
+#
+# The example is provided for reference only. It will be the responsibility of
+# the end-user to provide a buildspec that will deploy the desired application,
+# API, etc. to the preferred container tool in the preferred environment.
+################################################################################
+version: 0.2
+env:
+  shell: bash
+phases:
+  install:
+    commands:
+      - echo "Installing python and other dependencies"
+      - apt-get update && apt-get -y install jq python3-pip python3-dev curl
+  build:
+    commands:
+      - echo "Building latest image and push it to ECR"
+      - cd $CODEBUILD_SRC_DIR/app
+      - pwd
+      - ls -ltrh      
+      - $(aws ecr get-login --no-include-email --region $AWS_DEFAULT_REGION)
+      - docker build . -t $IMAGE_REPO_NAME:$CODEBUILD_RESOLVED_SOURCE_VERSION -f Dockerfile
+      - docker tag $IMAGE_REPO_NAME:$CODEBUILD_RESOLVED_SOURCE_VERSION $REPOSITORY_URI:latest
+      - docker push $REPOSITORY_URI:latest
+      - ls -ltrh
+      - pwd
+  post_build:
+    commands:
+      - ls -ltrh
+artifacts:
+  type: zip
+  files: '**/*'

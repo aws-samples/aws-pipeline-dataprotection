@@ -1,0 +1,254 @@
+Description: Template for creating CodeCommit Repo, RDS MySQL DB and ACM certificate
+Parameters:
+  AppName:
+    Description: application name
+    Type: String
+    Default: wordpress-blogs
+  CodeCommitRepositoryName:
+    Description: CodeCommit repository name
+    Type: String
+    Default: wordpress-blogs
+  CodeCommitRepositoryDescription:
+    Description: CloudFormation stack name
+    Type: String
+    Default: This repository will be used to store wordpress application source files  
+  DBInstanceClass:
+    Description: db instance class name
+    Type: String
+    Default: "db.t3.micro"
+  DBInstanceIdentifier:
+    Description: db instance identifier
+    Type: String
+    Default: "wordpress-rds-mysql"
+  DBEngine:
+    Description: db engine
+    Type: String
+    Default: "MySQL"
+  DBEngineVersion:
+    Description: db engine version
+    Type: String
+    Default: "8.0.32"  
+  EKSVpcId: 
+    Description: vpc id
+    Type: String
+    Default: "vpc-x0x0000x0x0000"
+  EKSSubnetIds: 
+    Description: Subnet IDs; after EKS creation, fetch these ids from EKS Networking Private Subnets
+    Type: List<String>
+    Default: "subnet-x0x0000x0x0000,subnet-x0x0000x0x0000"
+  EKSAvailabilityZone:
+    Description: availability zone
+    Type: String
+    Default: "us-east-1b"
+  EKSSecurityGroup:
+    Description: The EKS primary security group that contains instances that need access to the database
+    Default: "sg-x0x0000x0x0000"
+    Type: String
+  DNSDomainName:
+    Description: dns domain name 
+    Type: String
+    Default: "sampledomain.com"
+  DefaultEgressCidr:
+    Type: 'String'
+    AllowedPattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$'
+    Default: '0.0.0.0/0'
+    Description: 'Keep 0.0.0.0/0 unless you want to limit your default SecurityGroup Egress policy'
+
+Resources:
+  CodeCommitRepository:
+    Type: AWS::CodeCommit::Repository
+    Properties: 
+      RepositoryDescription: !Ref CodeCommitRepositoryDescription
+      RepositoryName: !Ref CodeCommitRepositoryName
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+          
+  RDSMySqlDataEncryption:
+    Type: "AWS::KMS::Key"
+    Properties:
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: rds-mysql-data-encryption
+        Statement:
+          - Sid: Allow administration of the key
+            Effect: Allow
+            Principal:
+              AWS: !Join
+                - ""
+                - - "arn:aws:iam::"
+                  - !Ref "AWS::AccountId"
+                  - ":root"
+            "Action": [
+                "kms:Create*",
+                "kms:Describe*",
+                "kms:Enable*",
+                "kms:List*",
+                "kms:Put*",
+                "kms:Update*",
+                "kms:Revoke*",
+                "kms:Disable*",
+                "kms:Get*",
+                "kms:Delete*",
+                "kms:TagResource",
+                "kms:UntagResource",
+                "kms:ScheduleKeyDeletion",
+                "kms:CancelKeyDeletion"
+            ]
+            Resource: "*"
+          - Sid: Allow use of the key
+            Effect: Allow
+            Principal:
+              AWS: !Join
+                - ""
+                - - "arn:aws:iam::"
+                  - !Ref "AWS::AccountId"
+                  - ":root"
+            "Action": [
+                "kms:Decrypt",
+                "kms:GenerateDataKey",
+                "kms:DescribeKey"
+            ]
+            Resource: '*'
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  RDSMySqlDataEncryptionAlias:
+      Type: AWS::KMS::Alias
+      Properties:
+        AliasName: alias/rdsdata
+        TargetKeyId: !Ref RDSMySqlDataEncryption
+
+  RDSMySqlSecretEncryption:
+    Type: "AWS::KMS::Key"
+    Properties:
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: rds-mysql-secret-encryption
+        Statement:
+          - Sid: Allow administration of the key
+            Effect: Allow
+            Principal:
+              AWS: !Join
+                - ""
+                - - "arn:aws:iam::"
+                  - !Ref "AWS::AccountId"
+                  - ":root"
+            "Action": [
+                "kms:Create*",
+                "kms:Describe*",
+                "kms:Enable*",
+                "kms:List*",
+                "kms:Put*",
+                "kms:Update*",
+                "kms:Revoke*",
+                "kms:Disable*",
+                "kms:Get*",
+                "kms:Delete*",
+                "kms:TagResource",
+                "kms:UntagResource",
+                "kms:ScheduleKeyDeletion",
+                "kms:CancelKeyDeletion"
+            ]
+            Resource: "*"
+          - Sid: Allow use of the key
+            Effect: Allow
+            Principal:
+              AWS: !Join
+                - ""
+                - - "arn:aws:iam::"
+                  - !Ref "AWS::AccountId"
+                  - ":root"
+            "Action": [
+                "kms:Decrypt",
+                "kms:GenerateDataKey",
+                "kms:DescribeKey"
+            ]
+            Resource: '*'          
+      MultiRegion: true
+      PendingWindowInDays: 7
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  RDSMySqlSecretEncryptionAlias:
+      Type: AWS::KMS::Alias
+      Properties:
+        AliasName: alias/rdssecret
+        TargetKeyId: !Ref RDSMySqlSecretEncryption
+
+  RDSMySQLDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties: 
+      DBSubnetGroupDescription: rds mysql db subnet group
+      SubnetIds: !Ref EKSSubnetIds
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  DBEKSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Open database for access
+      SecurityGroupIngress:        
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref EKSSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: !Ref DefaultEgressCidr
+          Description: 'Allow all outbound traffic by default'
+      VpcId: !Ref EKSVpcId
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  RDSMySQL:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AvailabilityZone: !Ref EKSAvailabilityZone
+      DBInstanceClass: !Ref DBInstanceClass
+      DBInstanceIdentifier: !Ref DBInstanceIdentifier
+      DBSubnetGroupName: !Ref RDSMySQLDBSubnetGroup
+      DBName: 'wordpress'
+      DBParameterGroupName: !Ref RDSDBParameterGroup
+      VPCSecurityGroups:
+        - !Ref DBEKSSecurityGroup
+      Engine: !Ref DBEngine
+      EngineVersion: !Ref DBEngineVersion
+      KmsKeyId: !Ref RDSMySqlDataEncryption
+      StorageEncrypted: true
+      ManageMasterUserPassword: true
+      MasterUserSecret:
+        KmsKeyId: !Ref RDSMySqlSecretEncryption
+      AllocatedStorage: "20"
+      MaxAllocatedStorage: 100
+      PubliclyAccessible: false
+      DeletionProtection: true
+      NetworkType: IPV4
+      BackupRetentionPeriod: 0
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  RDSDBParameterGroup:
+    Type: 'AWS::RDS::DBParameterGroup'
+    Properties:
+      DBParameterGroupName: 'rds-tls-custom-mysql'
+      Description: MySQL Parameter Group
+      Family: 'mysql8.0'
+      Parameters:
+        require_secure_transport: '1'
+
+  DNSDomainCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DNSDomainName
+      ValidationMethod: 'DNS'
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName

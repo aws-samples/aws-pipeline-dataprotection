@@ -1,0 +1,597 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  AppName:
+    Description: application name
+    Type: String
+    Default: wordpress-blogs
+  RepositoryName:
+    Description: codeCommit repository name
+    Type: String
+    Default: wordpress-blogs
+  BranchName:
+    Description: codeCommit branch name
+    Type: String
+    Default: master
+  EksClusterName:
+    Type: String
+    Description: dev security cluster
+    Default: dev-security-cluster-model
+  EksClusterRegion:
+    Type: String
+    Description: dev security cluster
+    Default: us-east-1
+  EcrBaseRepositoryName:
+    Description: ecr base image repository name
+    Type: String
+    Default: php
+  EcrRepositoryName:
+    Description: ecr repository name
+    Type: String
+    Default: wordpress-blogs
+  EKSServiceRole:
+    Description: eks service role
+    Type: String
+    Default: EKSServiceRole
+    
+Resources:
+  ECREncryption:
+    Type: AWS::KMS::Key
+    DependsOn: [SourceBuildRole]
+    Properties:
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: ecr-encryption-key
+        Statement:
+          - Sid: Allow administration of the key
+            Effect: Allow
+            Principal:
+              AWS: !Join
+                - ""
+                - - "arn:aws:iam::"
+                  - !Ref "AWS::AccountId"
+                  - ":root"
+            "Action": [
+                "kms:Create*",
+                "kms:Describe*",
+                "kms:Enable*",
+                "kms:List*",
+                "kms:Put*",
+                "kms:Update*",
+                "kms:Revoke*",
+                "kms:Disable*",
+                "kms:Get*",
+                "kms:Delete*",
+                "kms:TagResource",
+                "kms:UntagResource",
+                "kms:ScheduleKeyDeletion",
+                "kms:CancelKeyDeletion"
+            ]
+            Resource: "*"
+          - Sid: Allow use of the key
+            Effect: Allow
+            Principal:
+              AWS: [!Sub 'arn:aws:iam::${AWS::AccountId}:role/SourceBuildRole',!Sub 'arn:aws:iam::${AWS::AccountId}:role/EKSServiceRole']
+            "Action": [
+                "kms:Decrypt",
+                "kms:GenerateDataKey",
+                "kms:DescribeKey"
+            ]
+            Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepositoryName}'
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  ECREncryptionAlias:
+      Type: AWS::KMS::Alias
+      Properties:
+        AliasName: alias/ecr
+        TargetKeyId: !Ref ECREncryption 
+
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties: 
+      EncryptionConfiguration: 
+        EncryptionType: KMS
+        KmsKey: !Ref ECREncryption
+      ImageScanningConfiguration: 
+        ScanOnPush: true
+      RepositoryName: !Ref EcrRepositoryName
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  PipelineEncryption:
+    Type: AWS::KMS::Key
+    DependsOn: PipelineServiceRole
+    Properties:
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: pipeline-encryption-key
+        Statement:
+          - Sid: Allow administration of the key
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            "Action": [
+                "kms:Create*",
+                "kms:Describe*",
+                "kms:Enable*",
+                "kms:List*",
+                "kms:Put*",
+                "kms:Update*",
+                "kms:Revoke*",
+                "kms:Disable*",
+                "kms:Get*",
+                "kms:Delete*",
+                "kms:TagResource",
+                "kms:UntagResource",
+                "kms:ScheduleKeyDeletion",
+                "kms:CancelKeyDeletion"
+            ]
+            Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+          - Sid: Allow use of the key
+            Effect: Allow
+            Principal:
+              AWS: 
+              - !Join
+                  - ""
+                  - - "arn:aws:iam::"
+                    - !Ref "AWS::AccountId"
+                    - ":role/PipelineServiceRole"
+              - !Join
+                  - ""
+                  - - "arn:aws:iam::"
+                    - !Ref "AWS::AccountId"
+                    - ":role/SourceBuildRole"
+              - !Join
+                  - ""
+                  - - "arn:aws:iam::"
+                    - !Ref "AWS::AccountId"
+                    - ":role/EKSDeployRole"
+            "Action": [
+                "kms:Decrypt",
+                "kms:GenerateDataKey",
+                "kms:DescribeKey"
+            ]
+            Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  PipelineEncryptionAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/pipeline
+      TargetKeyId: !Ref PipelineEncryption
+
+  SourceBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+      Policies:
+        - PolicyName: SourceBuildPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:GetLogEvents
+                  - logs:PutLogEvents
+                  - logs:CreateLogStream
+                  - logs:DescribeLogStreams
+                  - logs:PutRetentionPolicy
+                  - logs:CreateLogGroup
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                  - s3:GetBucketPolicy
+                Resource: [!Sub 'arn:aws:s3:::${AWS::StackName}-artifact-bucket',!Sub 'arn:aws:s3:::${AWS::StackName}-artifact-bucket/*']
+              - Effect: Allow
+                Action:
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrBaseRepositoryName}'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:CompleteLayerUpload
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepositoryName}'
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - kms:DescribeKey
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource: !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+      Path: /
+      RoleName: 'SourceBuildRole'
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  EKSDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+      Policies:
+        - PolicyName: EKSDeployPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:              
+              - Effect: Allow
+                Action:
+                  - logs:GetLogEvents
+                  - logs:PutLogEvents
+                  - logs:CreateLogStream
+                  - logs:DescribeLogStreams
+                  - logs:PutRetentionPolicy
+                  - logs:CreateLogGroup
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                  - s3:GetBucketPolicy
+                Resource: [!Sub 'arn:aws:s3:::${AWS::StackName}-artifact-bucket',!Sub 'arn:aws:s3:::${AWS::StackName}-artifact-bucket/*']
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/${EKSServiceRole}
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/${EKSServiceRole}
+              - Effect: Allow
+                Action:
+                  - kms:DescribeKey
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"              
+      Path: /
+      RoleName: 'EKSDeployRole'
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  PipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action: "sts:AssumeRole"
+      Path: /
+      Policies:
+        - PolicyName: PipelinePolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codecommit:CancelUploadArchive
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:UploadArchive
+                Resource: !Sub 'arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${RepositoryName}'
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource:
+                  - !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/wordpress-sourcebuild'
+                  - !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/wordpress-eksdeploy'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                  - s3:GetBucketPolicy
+                Resource: [!Sub 'arn:aws:s3:::${AWS::StackName}-artifact-bucket',!Sub 'arn:aws:s3:::${AWS::StackName}-artifact-bucket/*']
+              - Effect: Allow
+                Action:
+                  - logs:GetLogEvents
+                  - logs:PutLogEvents
+                  - logs:CreateLogStream
+                  - logs:DescribeLogStreams
+                  - logs:PutRetentionPolicy
+                  - logs:CreateLogGroup
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${EKSServiceRole}'
+              - Effect: Allow
+                Action:
+                  - kms:DescribeKey
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource:
+                - !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+      RoleName: 'PipelineServiceRole'
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  AppPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: wordpress-pipeline
+      RoleArn: !GetAtt PipelineServiceRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: "1"
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                BranchName: !Ref BranchName
+                RepositoryName: !Ref RepositoryName
+                PollForSourceChanges: false
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              InputArtifacts:
+                - Name: SourceOutput
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref SourceBuildProject
+              RunOrder: 2
+        - Name: Deploy
+          Actions:
+            - Name: Deploy
+              InputArtifacts:
+                - Name: SourceOutput
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref EKSDeployProject
+              RunOrder: 3
+      ArtifactStore:
+        Type: S3
+        Location: !Ref CodePipelineArtifactStoreBucket
+        EncryptionKey:
+          Id: !GetAtt PipelineEncryption.Arn
+          Type: KMS
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  SourceBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Description: Build Project
+      Name: wordpress-sourcebuild
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:4.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: IMAGE_REPO_NAME
+            Value: !Ref EcrRepositoryName
+          - Name: REPOSITORY_URI
+            Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrRepositoryName}
+        PrivilegedMode: true
+      ServiceRole: !Ref SourceBuildRole
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: config/build.yaml
+      LogsConfig:
+        CloudWatchLogs:
+          GroupName: !Ref CloudWatchLogGroup
+          Status: ENABLED
+          StreamName: StageDeploy
+      QueuedTimeoutInMinutes: 10
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  EKSDeployProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Description: EKS Deploy Project
+      Name: wordpress-eksdeploy
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:4.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: IMAGE_REPO_NAME
+            Value: !Ref EcrRepositoryName
+          - Name: REPOSITORY_URI
+            Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrRepositoryName}
+          - Name: EKS_CLUSTER_NAME
+            Value: !Ref EksClusterName
+          - Name: EKS_SERVICE_ROLE
+            Value: !Sub arn:aws:iam::${AWS::AccountId}:role/${EKSServiceRole}
+          - Name: EKS_CLUSTER_REGION
+            Value: !Ref EksClusterRegion
+        PrivilegedMode: true
+      ServiceRole: !Ref EKSDeployRole
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: config/deploy.yaml
+      LogsConfig:
+        CloudWatchLogs:
+          GroupName: !Ref CloudWatchLogGroup
+          Status: ENABLED
+          StreamName: StageDeploy
+      QueuedTimeoutInMinutes: 10
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  CloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub ${AWS::StackName}-pipeline-logs
+      RetentionInDays: 7
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  CodePipelineArtifactStoreBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-artifact-bucket
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  CodePipelineArtifactStoreBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CodePipelineArtifactStoreBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: DenyUnEncryptedObjectUploads
+            Effect: Deny
+            Principal:
+              AWS:
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/PipelineServiceRole'
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/SourceBuildRole'
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/EKSServiceRole'
+            Action: s3:PutObject
+            Resource: !Join
+              - ""
+              - - !GetAtt
+                  - CodePipelineArtifactStoreBucket
+                  - Arn
+                - /*
+            Condition:
+              StringNotEquals:
+                "s3:x-amz-server-side-encryption": "aws:kms"
+          - Sid: DenyInsecureConnections
+            Effect: Deny
+            Principal:
+              AWS:
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/PipelineServiceRole'
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/SourceBuildRole'
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/EKSServiceRole'
+            Action: "s3:*"
+            Resource: !Join
+              - ""
+              - - !GetAtt
+                  - CodePipelineArtifactStoreBucket
+                  - Arn
+                - /*
+            Condition:
+              Bool:
+                "aws:SecureTransport": false
+
+  AmazonCloudWatchEventRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action: "sts:AssumeRole"
+      Path: /
+      Policies:
+        - PolicyName: cwe-pipeline-execution
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: "codepipeline:StartPipelineExecution"
+                Resource: !Join
+                  - ""
+                  - - "arn:aws:codepipeline:"
+                    - !Ref "AWS::Region"
+                    - ":"
+                    - !Ref "AWS::AccountId"
+                    - ":"
+                    - !Ref AppPipeline
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  AmazonCloudWatchEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Join
+            - ""
+            - - "arn:aws:codecommit:"
+              - !Ref "AWS::Region"
+              - ":"
+              - !Ref "AWS::AccountId"
+              - ":"
+              - !Ref RepositoryName
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - !Ref BranchName
+      Targets:
+        - Arn: !Join
+            - ""
+            - - "arn:aws:codepipeline:"
+              - !Ref "AWS::Region"
+              - ":"
+              - !Ref "AWS::AccountId"
+              - ":"
+              - !Ref AppPipeline
+          RoleArn: !GetAtt AmazonCloudWatchEventRole.Arn
+          Id: codepipeline-AppPipeline

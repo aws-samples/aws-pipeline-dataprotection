@@ -1,0 +1,78 @@
+apiVersion: apps/v1 # for versions before 1.9.0 use apps/v1beta2
+kind: Deployment
+metadata:
+  name: wordpress
+  namespace: wp
+  labels:
+    app: wordpress
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wordpress      
+      app: wordpress
+      tier: frontend
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: wordpress
+        app: wordpress
+        tier: frontend
+    spec:
+      serviceAccountName: wp-deployment-sa
+      containers:
+      - image: 000000000000.dkr.ecr.us-east-1.amazonaws.com/wordpress-blogs:latest
+        name: wordpress        
+        ports:
+        - containerPort: 80
+          name: http
+        volumeMounts:
+          - name: secrets-store-inline
+            mountPath: "/mnt/secrets"
+            readOnly: true
+          - name: persistent-storage
+            mountPath: "/var/www/html"
+        env:
+        - name: WORDPRESS_DB_HOST
+          value: wordpress-rds-mysql.0x0000.us-east-1.rds.amazonaws.com
+        - name: WORDPRESS_DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: rds-mysql-secret-db
+              key: db_username_01
+        - name: WORDPRESS_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: rds-mysql-secret-db
+              key: db_password_01
+      volumes:
+      - name: secrets-store-inline
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: wordpress-deployment-spc
+      - name: persistent-storage
+        persistentVolumeClaim:
+          claimName: ebs-claim
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-wp
+  namespace: wp
+  labels:
+    app: wordpress
+spec:
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: wordpress
+    app: wordpress
+    tier: frontend
+  type: NodePort
+---

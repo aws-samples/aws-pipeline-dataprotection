@@ -1,0 +1,282 @@
+Description: Template for creating waf, cloudfront policies and distribution
+Parameters:
+  AppName:
+    Description: application name
+    Type: String
+    Default: wordpress-blogs
+  ALBDNSName:
+    Description: alb dns name
+    Type: String
+    Default: "k8s-wp-ingressw-x0x0000x000-x0x0000x000.us-east-1.elb.amazonaws.com"  
+  AlternateDomainNames:
+    Description:    CNAMEs (alternate domain names), if any, for the distribution. Example. mydomain.com
+    Type:           String
+    Default: "sampledomain.com"
+  ACMCertificateIdentifier:
+    Description:    The AWS Certificate Manager (ACM) certificate identifier.
+    Type:           String
+    Default: "x0x0000-x0x0000-x0x0000-x0x0000-x0x0000"
+  TrustedIPAddresses: 
+    Description: Subnet IDs; after EKS creation, fetch these ids from EKS Networking Private Subnets
+    Type: List<String>
+    Default: "107.0x.0x.0x/32"
+
+Resources:
+  CustomCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties: 
+      CachePolicyConfig: 
+        Comment: "custom managed cache policy"
+        DefaultTTL: '86400'
+        MaxTTL: '31536000'
+        MinTTL: '1'
+        Name: "custom-managed-cache-policy"
+        ParametersInCacheKeyAndForwardedToOrigin: 
+          CookiesConfig: 
+            CookieBehavior: all
+          EnableAcceptEncodingGzip: "true"
+          HeadersConfig: 
+            HeaderBehavior: whitelist
+            Headers:
+              - Origin
+              - Referer
+              - Host
+          QueryStringsConfig: 
+            QueryStringBehavior: all
+
+  CustomOriginNoCachePolicy:
+    Type: AWS::CloudFront::OriginRequestPolicy
+    Properties: 
+      OriginRequestPolicyConfig: 
+        Comment: "custom headers passed nocache"
+        Name: "custom-headers-passed-nocache"
+        CookiesConfig: 
+            CookieBehavior: all
+        HeadersConfig: 
+          HeaderBehavior: allViewer
+        QueryStringsConfig: 
+          QueryStringBehavior: all
+
+  CustomOriginHeadersPassedPolicy:
+    Type: AWS::CloudFront::OriginRequestPolicy
+    Properties: 
+      OriginRequestPolicyConfig: 
+        Comment: "custom headers passed"
+        Name: "custom-headers-passed"
+        CookiesConfig: 
+            CookieBehavior: whitelist
+            Cookies:
+              - comment_author_*
+              - comment_author_email_*
+              - wordpress_test_cookie
+              - comment_author_url_*
+              - wordpress_*
+              - wordpress_logged_in_*
+              - PHPSESSID
+              - wordpress_sec_*
+              - wp-settings-*
+        HeadersConfig: 
+          HeaderBehavior: whitelist
+          Headers:
+            - Origin
+            - Referer
+            - Host
+            - CloudFront-Is-Tablet-Viewer            
+            - CloudFront-Is-Mobile-Viewer            
+            - CloudFront-Is-Desktop-Viewer
+        QueryStringsConfig: 
+          QueryStringBehavior: all
+
+  TrustedIPSets:
+    Type: AWS::WAFv2::IPSet
+    Properties: 
+      Addresses: !Ref TrustedIPAddresses
+      Description: 'Trusted ip addresses'
+      IPAddressVersion: 'IPV4'
+      Name: 'trusted-ip-sets'
+      Scope: 'CLOUDFRONT'
+
+  TrustedWebACL:
+    Type: AWS::WAFv2::WebACL
+    DependsOn: TrustedIPSets
+    Properties:
+      DefaultAction:
+        Block: {}
+      Description: 'trusted ip address web acl'
+      Name: 'TrustedIpAddresses'
+      Rules: 
+        - Action: 
+            Allow: {}
+          Name: 'allow-trusted-ip-addresses'
+          Priority: 0
+          Statement: 
+            IPSetReferenceStatement:
+              Arn: !GetAtt TrustedIPSets.Arn
+          VisibilityConfig: 
+            SampledRequestsEnabled: 'true'
+            CloudWatchMetricsEnabled: 'true'
+            MetricName: 'allow-trusted-ip-addresses'
+      VisibilityConfig: 
+            SampledRequestsEnabled: 'true'
+            CloudWatchMetricsEnabled: 'true'
+            MetricName: 'trusted-Ip-addresses'
+      Scope: 'CLOUDFRONT'
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn: TrustedWebACL
+    Properties:
+      DistributionConfig:
+        Comment: 'Cloudfront Distribution pointing ALB Origin'
+        Origins:
+          - DomainName: !Ref ALBDNSName
+            Id: !Ref ALBDNSName
+            CustomOriginConfig:
+              HTTPSPort: '443'
+              OriginProtocolPolicy: 'https-only'
+              OriginSSLProtocols:
+                - TLSv1
+        Enabled: true
+        HttpVersion: 'http2'
+        Aliases:
+          - !Ref 'AlternateDomainNames'
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - DELETE
+            - OPTIONS
+            - PATCH
+            - POST
+            - PUT
+          Compress: 'true'
+          TargetOriginId: !Ref ALBDNSName
+          CachePolicyId: !Ref CustomCachePolicy
+          OriginRequestPolicyId: !Ref CustomOriginHeadersPassedPolicy
+          ViewerProtocolPolicy: 'redirect-to-https'
+        CacheBehaviors:
+          - 
+            AllowedMethods:
+              - GET
+              - HEAD
+              - DELETE
+              - OPTIONS
+              - PATCH
+              - POST
+              - PUT
+            CachedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            Compress: 'true'
+            PathPattern: "/wp-admin/*"
+            TargetOriginId: !Ref ALBDNSName
+            CachePolicyId: !Ref CustomCachePolicy
+            OriginRequestPolicyId: !Ref CustomOriginNoCachePolicy
+            ViewerProtocolPolicy: 'redirect-to-https'
+          - 
+            AllowedMethods:
+              - GET
+              - HEAD
+              - DELETE
+              - OPTIONS
+              - PATCH
+              - POST
+              - PUT
+            CachedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            Compress: 'true'
+            PathPattern: "/wp-cron.php"
+            TargetOriginId: !Ref ALBDNSName
+            CachePolicyId: !Ref CustomCachePolicy
+            OriginRequestPolicyId: !Ref CustomOriginNoCachePolicy
+            ViewerProtocolPolicy: 'redirect-to-https'
+          - 
+            AllowedMethods:
+              - GET
+              - HEAD
+              - DELETE
+              - OPTIONS
+              - PATCH
+              - POST
+              - PUT
+            CachedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            Compress: 'true'
+            PathPattern: "/wp-login.php"
+            TargetOriginId: !Ref ALBDNSName
+            CachePolicyId: !Ref CustomCachePolicy
+            OriginRequestPolicyId: !Ref CustomOriginNoCachePolicy
+            ViewerProtocolPolicy: 'redirect-to-https'
+          - 
+            AllowedMethods:
+              - GET
+              - HEAD
+              - DELETE
+              - OPTIONS
+              - PATCH
+              - POST
+              - PUT
+            CachedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            Compress: 'true'
+            PathPattern: "/xmlrpc.php"
+            TargetOriginId: !Ref ALBDNSName
+            CachePolicyId: !Ref CustomCachePolicy
+            OriginRequestPolicyId: !Ref CustomOriginNoCachePolicy
+            ViewerProtocolPolicy: 'redirect-to-https'
+          - 
+            AllowedMethods:
+              - GET
+              - HEAD
+              - DELETE
+              - OPTIONS
+              - PATCH
+              - POST
+              - PUT
+            CachedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            Compress: 'true'
+            PathPattern: "/wp-trackback.php"
+            TargetOriginId: !Ref ALBDNSName
+            CachePolicyId: !Ref CustomCachePolicy
+            OriginRequestPolicyId: !Ref CustomOriginNoCachePolicy
+            ViewerProtocolPolicy: 'redirect-to-https'
+          - 
+            AllowedMethods:
+              - GET
+              - HEAD
+              - DELETE
+              - OPTIONS
+              - PATCH
+              - POST
+              - PUT
+            CachedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            Compress: 'true'
+            PathPattern: "/wp-signup.php"
+            TargetOriginId: !Ref ALBDNSName
+            CachePolicyId: !Ref CustomCachePolicy
+            OriginRequestPolicyId: !Ref CustomOriginNoCachePolicy
+            ViewerProtocolPolicy: 'redirect-to-https'
+        ViewerCertificate:
+          AcmCertificateArn: !Sub 'arn:aws:acm:${AWS::Region}:${AWS::AccountId}:certificate/${ACMCertificateIdentifier}'
+          SslSupportMethod:  'sni-only'
+          MinimumProtocolVersion: 'TLSv1.2_2021'
+        WebACLId: !GetAtt TrustedWebACL.Arn
+      Tags: 
+        - Key: Name
+          Value: !Ref AppName

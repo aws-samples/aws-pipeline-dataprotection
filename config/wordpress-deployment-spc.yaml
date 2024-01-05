@@ -1,0 +1,26 @@
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: wordpress-deployment-spc
+  namespace: wp
+spec:
+  provider: aws
+  parameters:
+    objects: |
+        - objectName: 'rds!db-0x0000-0x0000-0x0000-0x0000-0x0000'
+          objectType: "secretsmanager"
+          jmesPath:
+            - path: username
+              objectAlias: dbusername
+            - path: password
+              objectAlias: dbpassword
+  # Create k8s secret. It requires volume mount first in the pod and then sync.
+  secretObjects:                
+    - secretName: rds-mysql-secret-db
+      type: Opaque
+      data:
+        #- objectName: <objectName> or <objectAlias> 
+        - objectName: dbusername
+          key: db_username_01
+        - objectName: dbpassword
+          key: db_password_01
